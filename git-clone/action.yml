@@ -1,0 +1,45 @@
+---
+name: 'Clone commit'
+# Git server has to set uploadpack.allowReachableSHA1InWant=true in config
+description: 'Clone only one commit from any repository. Does not require node'
+
+inputs:
+  repository:
+    description: 'Repository url.'
+    required: false
+    default: ${{ github.server_url }}/${{ github.repository }}
+  ref:
+    description: 'Commit/branch/tag to clone'
+    required: false
+    default: '${{ github.sha }}'
+  path:
+    description: 'Path where to clone repository'
+    required: false
+    default: '.'
+  token:
+    description: 'Access token used to fetch repository'
+    required: false
+    default: '${{ github.token }}'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Clone
+      shell: sh
+      run: |
+        if [ -n "${{ inputs.token }}" ]; then
+          repository=${{ inputs.repository }}
+          prefix="${repository%%://*}://"
+          postfix="${repository#$prefix}"
+          remote="${prefix}${{ inputs.token }}:x-oauth-basic@${postfix}"
+        else
+          remote="${{ inputs.repository }}"
+        fi
+        mkdir -p "${{ inputs.path }}"
+        cd "${{ inputs.path }}"
+        git init
+        git remote rm origin 2>/dev/null || true
+        git clean -dfx
+        git remote add origin "$remote"
+        git fetch --depth 1 origin ${{ inputs.ref }}
+        git checkout FETCH_HEAD --force

@@ -1,0 +1,113 @@
+---
+name: 'Build Yocto with kas in kas container. Workflow copies artifacts to
+  <artifacts-dir> directory on build_artifacts volume'
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: runs-on
+        type: string
+        required: true
+      kas-config:
+        description: 'kas config files in "<filepath>.yml[:<filepath>.yml]..." format.
+          <filepath> should be in the format <repository_name>/<path_to_file>.yml'
+        type: string
+        required: true
+      kas-version:
+        description: kas container version to use
+        type: string
+        default: "4.2"
+      machine:
+        description: Target platform/machine
+        type: string
+        required: true
+      artifacts:
+        description: List of artifacts to copy from deploy dir to mounted volume
+        type: string
+        required: true
+      artifacts-dir:
+        description: Where to create folder with artifacts in mounted volume.
+        type: string
+        required: true
+      sstate-dir:
+        description: sstate-cache path in mounted volume. Leave empty to use local per-job cache.
+        type: string
+        required: false
+        default: ''
+      dl-dir:
+        description: Where to store downloaded files in mounted volume. Leave empty to use local per-job download dir.
+        type: string
+        required: false
+        default: ''
+    secrets:
+      ssh-key:
+        description: Used by kas/bitbake to clone private repositories
+        required: false
+
+jobs:
+  build:
+    runs-on:
+      labels: ${{ inputs.runs-on }}
+    container:
+      image: ghcr.io/siemens/kas/kas:${{ inputs.kas-version }}
+      env:
+        KAS_WORK_DIR: /work
+        KAS_MACHINE: ${{ inputs.machine }}
+        SHELL: /bin/bash
+        TERM: xterm-256color
+      options: --init --log-driver=none --user=root
+      volumes:
+        - build_artifacts:/artifacts
+    steps:
+      - name: Prepare
+        shell: bash
+        run: |
+          install -d -o builder -g users "$KAS_WORK_DIR" "$KAS_WORK_DIR/build"
+          ln -s "$KAS_WORK_DIR/build" /build
+          chown -h "builder:users" /build
+          apt update && apt install -y jq
+          repository_name="${{ github.repository }}"
+          # remove owner e.g. "zarhus/"
+          repository_name="${repository_name#*/}"
+          echo "REPOSITORY=$repository_name" >> "$GITHUB_ENV"
+
+      - uses: zarhus/workflows/git-clone@v1
+        with:
+          path: "$KAS_WORK_DIR/$REPOSITORY"
+
+      - name: Symlink repository to /repo
+        run: |
+          chown -R builder:builder "$KAS_WORK_DIR/$REPOSITORY"
+          ln -s "$KAS_WORK_DIR/$REPOSITORY" /repo
+          chown -h "builder:users" /repo
+
+      - name: Build ${{ inputs.machine }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.sstate-dir }}" ]; then
+            export SSTATE_DIR="/artifacts/${{ inputs.sstate-dir }}"
+            install -d -o builder -g users "$SSTATE_DIR"
+          fi
+          if [ -n "${{ inputs.dl-dir }}" ]; then
+            export DL_DIR="/artifacts/${{ inputs.dl-dir }}"
+            install -d -o builder -g users "$DL_DIR"
+          fi
+          cd "$KAS_WORK_DIR"
+          SSH_PRIVATE_KEY='${{ secrets.ssh-key }}' su builder -c " \
+            cd $KAS_WORK_DIR && \
+            unset KAS_BUILD_DIR && \
+            kas build ${{ inputs.kas-config }} \
+            "
+
+      - name: Copy artifacts
+        shell: bash
+        env:
+          ARTIFACT_DIR: /artifacts/${{ inputs.artifacts-dir }}
+        run: |
+          install -d -o builder -g users "$ARTIFACT_DIR"
+          echo '${{ inputs.artifacts }}' | jq -rc '.[]' > artifacts_file
+          readarray -t artifacts < artifacts_file
+          for artifact in "${artifacts[@]}"; do
+            cp "/build/tmp/deploy/images/${{ inputs.machine }}/$artifact" "$ARTIFACT_DIR/"
+          done

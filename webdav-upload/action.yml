@@ -1,0 +1,53 @@
+name: 'Upload files to WebDAV server'
+description: 'Upload files to WebDAV server'
+
+inputs:
+  files:
+    description: 'Files to upload. Accepts glob. Paths with spaces need to be single quoted'
+    required: true
+  url:
+    description: 'The WebDAV server url'
+    required: true
+  directory:
+    description: 'Subdirectory under which to put files. Folder is created if
+      it does not exist. Only one level is allowed e.g. dir not dir1/dir2/dir3'
+    required: false
+  username:
+    description: 'The WebDAV-User to use'
+    required: true
+  password:
+    description: 'The Password for the WebDav-User'
+    required: true
+  rate-limit:
+    description: 'Specify the maximum transfer rate. You can use K/M/G suffix'
+    required: false
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+    - name: Upload files
+      shell: bash
+      run: |
+        set -x
+        set -eou pipefail
+        shopt -s nullglob
+        if [ -n "${{ inputs.rate-limit }}" ]; then
+          limit=( --limit-rate "${{ inputs.rate-limit }}" )
+        fi
+        files=( ${{ inputs.files }} )
+        credentials='${{ inputs.username }}:${{ inputs.password }}'
+        if [ -n "${{ inputs.directory }}" ]; then
+          if ! curl --fail-with-body -u "$credentials" \
+              -X PROPFIND "${{ inputs.url }}/${{ inputs.directory }}";
+          then
+            curl --fail-with-body -u "$credentials" -X MKCOL \
+              "${{ inputs.url }}/${{ inputs.directory }}"
+          fi
+        fi
+
+        for filepath in "${files[@]}"; do
+          file="$(basename "$filepath")"
+          curl --fail-with-body "${limit[@]}" -T "$filepath" \
+            -u "$credentials" "${{ inputs.url }}/${{ inputs.directory }}/$file"
+        done

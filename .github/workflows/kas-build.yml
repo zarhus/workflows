@@ -111,3 +111,6 @@ jobs:
           for artifact in "${artifacts[@]}"; do
             cp "/build/tmp/deploy/images/${{ inputs.machine }}/$artifact" "$ARTIFACT_DIR/"
           done
+
+      - name: Clean build dir
+        run: rm -rf /build
